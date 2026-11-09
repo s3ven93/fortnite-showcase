@@ -240,12 +240,26 @@ dialog[open] .m{animation:zoom .35s var(--ease)}
   background:repeating-linear-gradient(115deg,#ffffff08 0 16px,transparent 16px 32px),radial-gradient(circle at 50% 35%,color-mix(in srgb,var(--c) 90%,#fff 10%),color-mix(in srgb,var(--c) 35%,#000 65%))}
 .m .art img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:center bottom}
 .m .art img.big{inset:4% 4% 2%;width:92%;height:94%}
-.m .info{padding:28px;display:flex;flex-direction:column;gap:12px}
+.m .info{padding:28px;display:flex;flex-direction:column;gap:12px;max-height:88vh;overflow:auto}
 .m h3{font-size:52px;font-weight:900;font-style:italic}
 .m .rar{align-self:start;background:var(--c);padding:4px 12px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;text-shadow:0 1px 2px #0008}
 .m dl{display:grid;grid-template-columns:auto 1fr;gap:8px 18px;margin:6px 0 0;font-size:14px}
 .m dt{color:var(--muted)}
 .m dd{margin:0;font-weight:700}
+.m .nav2{margin-top:auto;position:sticky;bottom:-28px;display:flex;gap:8px;padding-top:12px;background:linear-gradient(transparent,var(--panel-solid) 30%)}
+.styles{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:14px;margin-top:2px}
+.styles-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.styles-count{font:800 14px var(--display);letter-spacing:1px;color:var(--accent)}
+.styles-note{color:var(--muted);font-size:13px;margin:0;border-top:1px solid var(--line);padding-top:14px}
+.style-label{font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--faint);margin-bottom:7px}
+.style-row{display:flex;flex-wrap:wrap;gap:8px}
+.style-chip{position:relative;width:76px;border-radius:10px;overflow:hidden;background:#ffffff0a;border:1px solid var(--line);opacity:.5;filter:grayscale(.5)}
+.style-chip.has{opacity:1;filter:none;border-color:color-mix(in srgb,var(--c) 70%,#fff 30%);box-shadow:0 0 0 1px color-mix(in srgb,var(--c) 70%,#fff 30%),0 4px 12px #0006}
+.style-chip img,.style-sw{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:radial-gradient(circle at 50% 35%,color-mix(in srgb,var(--c) 70%,#fff 10%),color-mix(in srgb,var(--c) 40%,#000 60%))}
+.style-n{display:block;padding:4px 6px;font-size:10px;font-weight:700;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#05081a}
+.style-chip.has .style-n{color:var(--text)}
+.style-chip:not(.has) .style-n{color:var(--muted)}
+.lock{position:absolute;top:4px;right:4px;font-size:11px;filter:drop-shadow(0 1px 1px #000)}
 .m .nav2{margin-top:auto;display:flex;gap:8px}
 .m .nav2 .btn{padding:10px 16px;font-size:16px}
 
@@ -410,14 +424,16 @@ const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 // ---------- artwork ----------
 const IMG = (id, kind='icon') => `https://fortnite-api.com/images/cosmetics/br/${encodeURIComponent(id)}/${kind}.png`;
 const lookups = new Map();
-function lookup(id){
+// full cosmetic record from the API (icon + variant style list), cached per id
+function cosmetic(id){
   if (!lookups.has(id)) lookups.set(id,
     fetch('https://fortnite-api.com/v2/cosmetics/br/' + encodeURIComponent(id))
       .then(r => r.ok ? r.json() : null)
-      .then(j => j?.data?.images?.icon || j?.data?.images?.smallIcon || null)
+      .then(j => j?.data || null)
       .catch(() => null));
   return lookups.get(id);
 }
+const lookup = id => cosmetic(id).then(d => d?.images?.icon || d?.images?.smallIcon || null);
 // big = try the transparent full-body render first
 function art(img, item, ph, big){
   img.alt = item.name || 'Cosmetic';
@@ -541,8 +557,53 @@ function showInLocker(cat, rarity){
 }
 
 // ---------- modal ----------
+const pretty = s => (s || '').replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+// Collect the style tags the account owns, per channel, from the sanitized export.
+function ownedTags(item){
+  const map = {};
+  for (const v of item.variants || []) {
+    map[v.channel] = new Set([...(v.owned || []), ...(v.active ? [v.active] : [])]);
+  }
+  return map;
+}
+// Build a gallery of every style, marking the ones unlocked on this account.
+async function renderStyles(host, item, token){
+  const d = await cosmetic(item.id);
+  if (token !== modalToken) return;                 // user already moved on
+  const owned = ownedTags(item);
+  const chans = (d?.variants || []).filter(v => (v.options || []).length > 1);
+  if (!chans.length) {
+    if (item.styles?.total) host.append(el('p', 'styles-note', `${item.styles.owned} of ${item.styles.total} bonus styles unlocked.`));
+    return;
+  }
+  const totalOwned = chans.reduce((n, v) => n + (v.options || []).filter(o => owned[v.channel]?.has(o.tag)).length, 0);
+  const totalAll = chans.reduce((n, v) => n + v.options.length, 0);
+  const head = el('div', 'styles-head');
+  head.append(el('span', 'eyebrow', 'Styles'), el('span', 'styles-count', `${totalOwned} of ${totalAll} unlocked`));
+  host.append(head);
+  for (const v of chans) {
+    const set = owned[v.channel] || new Set();
+    const group = el('div', 'style-group');
+    if (chans.length > 1 || (v.type && v.type !== 'party')) group.append(el('div', 'style-label', pretty(v.type || v.channel)));
+    const row = el('div', 'style-row');
+    for (const o of v.options) {
+      const has = set.has(o.tag);
+      const chip = el('div', 'style-chip' + (has ? ' has' : ''));
+      chip.title = (o.name || o.tag) + (has ? ' — unlocked' : ' — locked');
+      if (o.image) { const im = el('img'); im.loading = 'lazy'; im.alt = o.name || o.tag; im.src = o.image; chip.append(im); }
+      else chip.append(el('div', 'style-sw'));
+      chip.append(el('span', 'style-n', o.name || pretty(o.tag)));
+      if (!has) chip.append(el('span', 'lock', '🔒'));
+      row.append(chip);
+    }
+    group.append(row); host.append(group);
+  }
+}
+
+let modalToken = 0;
 function openModal(items, index, cat){
   modalList = items; modalIndex = index;
+  const token = ++modalToken;
   const item = items[index];
   const [label, color] = rar(item.rarity);
   const m = $('#modalBody'); m.replaceChildren(); m.style.setProperty('--c', color);
@@ -551,10 +612,10 @@ function openModal(items, index, cat){
   info.append(el('div', 'eyebrow', CATEGORIES[cat] || cat), el('h3', '', item.name || 'Unknown'), el('span', 'rar', label));
   const dl = el('dl');
   const row = (k, v) => dl.append(el('dt', '', k), el('dd', '', v));
-  if (item.styles?.total) row('Styles', `${item.styles.owned} / ${item.styles.total} unlocked`);
-  if (item.gold === 100) row('Gold', 'Maxed out');
+  if (item.gold === 100) row('Finish', 'Gold — maxed out');
   row('In locker', `${index + 1} of ${fmt(items.length)}`);
   info.append(dl);
+  if (item.styles?.total) { const sw = el('div', 'styles'); info.append(sw); renderStyles(sw, item, token); }
   const nav = el('div', 'nav2');
   const prev = el('button', 'btn ghost', '←'); prev.setAttribute('aria-label', 'Previous item'); prev.disabled = index === 0; prev.onclick = () => openModal(items, index - 1, cat);
   const next = el('button', 'btn ghost', '→'); next.setAttribute('aria-label', 'Next item'); next.disabled = index >= items.length - 1; next.onclick = () => openModal(items, index + 1, cat);
